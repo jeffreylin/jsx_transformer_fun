@@ -1,9 +1,9 @@
-# transformer_fun
+# jsx_transformer_fun
 A JS Code Transformer Pipeline Experiment
 
 ## Installation
 ```bash
-cd transformer_fun
+cd jsx_transformer_fun
 npm install
 ```
 
