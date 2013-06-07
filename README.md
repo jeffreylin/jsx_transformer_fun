@@ -1,6 +1,9 @@
-transformer_fun
-===============
+# transformer_fun
+A JS Code Transformer Pipeline Experiment
 
-JS Code Transformer Pipeline Experiment
-Usage:
-./JSX-cli input_dir output_dir
+# Usage
+``` bash
+cd transformer_fun
+npm install
+./jsx-cli input_dir output_dir
+```
