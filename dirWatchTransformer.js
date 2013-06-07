@@ -1,11 +1,14 @@
-/**
+/*
  * @providesModule dirWatchTransformer
  */
 
 var crypto = require('crypto');
 var fs = require('fs');
+var path = require('path');
+//var mkdirp = require('mkdirp');
+var rmdirSyncRecursive = require('wrench').rmdirSyncRecursive;
 
-var directoryIterator = require('./directoryIterator');
+var dirWatcher = require('./dirWatcher');
 var log = require('./log');
 var Cache = require('./Cache');
 
@@ -23,9 +26,9 @@ options object: {
 */
 function DirWatchTransformer(transformers, _input_dir, _output_dir, _cache_dir) {
   // normalize dirs
-  var input_dir = _input_dir.replace(/\/*$/g, '') + '/';
-  var output_dir = _output_dir.replace(/\/*$/g, '') + '/';
-  var cache_dir = _cache_dir.replace(/\/*$/g, '') + '/';
+  var input_dir = path.resolve(_input_dir);
+  var output_dir = path.resolve(_output_dir);
+  var cache_dir = path.resolve(_cache_dir);
 
   // set obj vars
   this.cache = new Cache(cache_dir);
@@ -33,46 +36,111 @@ function DirWatchTransformer(transformers, _input_dir, _output_dir, _cache_dir) 
   this.outputDir = output_dir;
   this.transformers = transformers;
 
-  // pre-calculate transformer hash
-  var hasher = crypto.createHash('md5');
-  transformers.forEach(function(transformer){
-    hasher.update(transformer.toString());
-  });
-  this.transformerHash = hasher.digest();
+  var watcher = dirWatcher(input_dir);
+  watcher.on('added', this.processAddedEvent.bind(this));
+  watcher.on('deleted', this.processDeletedEvent.bind(this));
+  watcher.on('changed', this.processChangedEvent.bind(this));
 
-  var processFileBound = this.processFile.bind(this);
-
-  // initial pass
-  var ee = directoryIterator(input_dir);
-  ee.on('file', (function(relative_filepath){
-    processFileBound(relative_filepath);
-  }).bind(this));
-
-  // watch for file changes
-  fs.watch(input_dir, function(mutation_type, relative_filepath){
-    processFileBound(relative_filepath);
-  });
+  // Debugging
+  function logArguments(){
+    log(Array.prototype.slice.call(arguments), 1);
+  }
+  watcher.on('added', logArguments.bind(null, 'added'));
+  watcher.on('deleted', logArguments.bind(null, 'deleted'));
+  watcher.on('changed', logArguments.bind(null, 'changed'));
 }
 
 DirWatchTransformer.prototype = {
+  processAddedEvent: function(relative_filepath) {
+    var input_path = path.join(this.inputDir, relative_filepath);
+    try {
+      var stat = fs.statSync(input_path);
+    } catch(e) {
+      // Race condition - file/dir has already been removed
+      log(e,5);
+      return;
+    }
+
+    if (stat.isFile()) {
+      this.transformFileAndWriteToOutput(relative_filepath);
+    } else if (stat.isDirectory()) {
+      var output_path = path.join(this.outputDir, relative_filepath);
+      if (!fs.existsSync(output_path)) {
+        fs.mkdirSync(path.join(this.outputDir, relative_filepath));
+      }
+    } else {
+      // Complain if it's not a file or directory
+      log(['Don\'t know what to do with ', input_path, '. Got stat:', stat], 5);
+    }
+  },
+  processDeletedEvent: function(relative_filepath) {
+    var output_path = path.join(this.outputDir, relative_filepath);
+    try {
+      var stat = fs.statSync(output_path);
+    } catch(e) {
+      log(e,5);
+      return;
+    }
+
+    if (stat.isFile()) {
+      fs.unlinkSync(output_path);
+    } else if (stat.isDirectory()) {
+      rmdirSyncRecursive(output_path);
+    } else {
+      // Complain if it's not a file or directory
+      log(['Don\'t know what to do with ', output_path, '. Got stat:', stat], 5);
+    }
+  },
+  processChangedEvent: function(relative_filepath) {
+    var input_path = path.join(this.inputDir, relative_filepath);
+    try {
+      var stat = fs.statSync(input_path);
+    } catch(e) {
+      // Race condition - file/dir has already been removed
+      log(e,5);
+      return;
+    }
+
+    if (stat.isFile()) {
+      this.transformFileAndWriteToOutput(relative_filepath);
+    } else if (stat.isDirectory()) {
+      log('Actually not sure what to do with directory changed event... What does it mean???');
+    } else {
+      // Complain if it's not a file or directory
+      log(['Don\'t know what to do with ', input_path, '. Got stat:', stat], 5);
+    }
+  },
+  // invariant - input file exists
   // transforms file and writes to the output_dir
-  processFile: function(relative_filepath) {
+  transformFileAndWriteToOutput: function(relative_filepath) {
     var cache = this.cache;
     var transformers = this.transformers;
-    var input_dir = this.inputDir;
-    var output_dir = this.outputDir
+    var input_filepath = path.join(this.inputDir, relative_filepath);
+    var output_filepath = path.join(this.outputDir, relative_filepath);
 
     try {
-      var contents = fs.readFileSync(input_dir + relative_filepath, 'utf-8');
+      var contents =
+        fs.readFileSync(input_filepath, 'utf-8');
     } catch(e) {
+      // Race condition - looks like the file doesn't actually exist
       log(e, 5);
       return;
     }
 
-    // hash(filename + contents + hash(transformers));
+    // decide on transformers to execute
+    transformers = this.transformers.filter(function(transformer) {
+      return transformer.shouldTransform({
+        code: contents,
+        path: relative_filepath
+      });
+    });
+
+    // hash(contents + transformer names);
     var hasher = crypto.createHash('md5');
     hasher.update(contents);
-    hasher.update(this.transformerHash);
+    transformers.forEach(function(transformer) {
+      hasher.update(transformer.name);
+    });
     var hash = hasher.digest();
 
     // check hash
@@ -82,24 +150,37 @@ DirWatchTransformer.prototype = {
     }
 
     // transform file
+    log('Transforming file ' + input_filepath, 3);
     transformers.forEach(function(transformer){
-      contents = transformer(relative_filepath, contents);
+      contents = transformer.transform({
+        path: relative_filepath,
+        code: contents
+      });
     });
 
     // save file
-    log('Updating file ' + output_dir + relative_filepath, 2);
-    fs.writeFileSync(output_dir + relative_filepath, contents);
+    // hopefully the dir the file is in already exists...?  =[
+    log('Writing file ' + output_filepath, 2);
+    fs.writeFileSync(output_filepath, contents);
 
     // update cache
     cache.set(hash, contents);
   }
 };
 
+module.exports = dirWatchTransformer;
+
 /*
 TODO:
- - pre-calculate transformer hashes
- - need to return relative paths for output writing
- - transformer needs a willTransform() method
-*/
+Make sure when writing a file to output that the output file isn't a dir and the output dir isn't a file
+ - remember that the output dir can change from under us since we don't monitor it
 
-module.exports = dirWatchTransformer;
+Corner cases:
+If we have
+input_dir/mything
+then behind the scenes change
+output_dir/mything/
+to be a directory, and then remove input_dir/mything, then output_dir/mything/ is removed as well...
+IE: no dir vs file check there...
+^this will probably never happen/matter... but just wanted to document that assumtion =P
+*/

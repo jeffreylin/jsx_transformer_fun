@@ -1,0 +1,9 @@
+{
+  "name": "jsx_jl",
+  "version": "0.0.2",
+  "dependencies": {
+    "react-tools": "~0.3.2",
+    "underscore": "~1.4.4",
+    "wrench": "~1.5.1"
+  }
+}
