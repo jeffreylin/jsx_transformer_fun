@@ -8,7 +8,7 @@ npm install
 ```
 
 ## Usage
-Watches files in `input_dir` and write JSX transformed files to `output_dir`.
+Watches files in `input_dir` and writes JSX transformed files to `output_dir`.
 ```bash
 ./jsx-cli input_dir output_dir
 ```
