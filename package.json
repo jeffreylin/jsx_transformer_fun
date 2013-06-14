@@ -1,9 +1,16 @@
 {
   "name": "jsx_jl",
   "version": "0.0.2",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jeffreylin/jsx_transformer_fun.git"
+  },
   "dependencies": {
     "react-tools": "~0.3.2",
     "underscore": "~1.4.4",
     "wrench": "~1.5.1"
+  },
+  "engine": {
+    "node": ">=0.10.0"
   }
 }
